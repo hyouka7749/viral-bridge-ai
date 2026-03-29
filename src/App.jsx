@@ -20,7 +20,7 @@ export default function App() {
     setOptimizedScript('');
     try {
       const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
-      const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview", systemInstruction: PROMPTS[activeMode] });
+      const model = genAI.getGenerativeModel({ model: "gemini-robotics-er-1.5-preview", systemInstruction: PROMPTS[activeMode] });
       const result = await model.generateContent(`Analyze this transcript: \n\n ${script}`);
       const responseText = result.response.text();
 
