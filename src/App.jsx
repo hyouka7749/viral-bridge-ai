@@ -9,7 +9,6 @@ import { PROMPTS } from './constants/prompts';
 import './App.css';
 
 let toastId = 0;
-
 const YT_REGEX = /(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)/;
 
 export default function App() {
@@ -18,7 +17,6 @@ export default function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [optimizedScript, setOptimizedScript] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isFetchingTranscript, setIsFetchingTranscript] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [metrics, setMetrics] = useState({ score: '--', status: 'READY', rating: 'N/A' });
   const [toasts, setToasts] = useState([]);
@@ -33,49 +31,33 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Auto-fetch transcript khi paste link hợp lệ
+  // Khi paste URL hợp lệ → clear kết quả cũ
   useEffect(() => {
     clearTimeout(debounceRef.current);
-
-    if (!YT_REGEX.test(youtubeUrl)) {
-      return;
-    }
-
-    debounceRef.current = setTimeout(async () => {
-      setIsFetchingTranscript(true);
+    if (!YT_REGEX.test(youtubeUrl)) return;
+    debounceRef.current = setTimeout(() => {
       setScript('');
       setOptimizedScript('');
-      try {
-        const res = await fetch(`/api/get-transcript?url=${encodeURIComponent(youtubeUrl)}`);
-        const data = await res.json();
-        if (data.status === "Success") {
-          setScript(data.script);
-          addToast('Đã lấy transcript thành công!');
-        } else {
-          throw new Error(data.message);
-        }
-      } catch (err) {
-        addToast(err.message || 'Không lấy được transcript!', 'error');
-      } finally {
-        setIsFetchingTranscript(false);
-      }
-    }, 600);
-
+      setMetrics({ score: '--', status: 'READY', rating: 'N/A' });
+    }, 300);
     return () => clearTimeout(debounceRef.current);
   }, [youtubeUrl]);
 
-  // Ctrl+Enter để phân tích
+  // Ctrl+Enter
   useEffect(() => {
     const handler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleOptimize();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [script, isLoading]);
+  }, [youtubeUrl, script, isLoading]);
 
   const handleOptimize = async () => {
-    if (!script.trim()) {
-      return addToast('Chưa có transcript! Hãy dán link YouTube trước.', 'error');
+    const hasUrl = YT_REGEX.test(youtubeUrl);
+    const hasScript = script.trim().length > 0;
+
+    if (!hasUrl && !hasScript) {
+      return addToast('Hãy dán link YouTube hoặc nhập transcript!', 'error');
     }
 
     setIsLoading(true);
@@ -84,11 +66,33 @@ export default function App() {
     try {
       const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
       const model = genAI.getGenerativeModel({
-        model: "gemini-flash-lite-latest",
-        systemInstruction: PROMPTS[activeMode]
+        model: 'gemini-flash-lite-latest',
+        systemInstruction: PROMPTS[activeMode],
       });
 
-      const result = await model.generateContent(`Analyze this transcript:\n\n${script}`);
+      let contentParts;
+
+      if (hasUrl && !hasScript) {
+        // Gửi YouTube URL trực tiếp cho Gemini — nó tự lấy transcript
+        contentParts = [
+          {
+            fileData: {
+              mimeType: 'video/mp4',
+              fileUri: youtubeUrl,
+            },
+          },
+          {
+            text: 'Analyze this YouTube video and identify the best viral segments based on its transcript/content.',
+          },
+        ];
+      } else {
+        // Dùng transcript đã có (nhập tay hoặc từ lần trước)
+        contentParts = [
+          { text: `Analyze this transcript:\n\n${script}` },
+        ];
+      }
+
+      const result = await model.generateContent(contentParts);
       const responseText = result.response.text();
 
       const ratingMatch = responseText.match(/\[RATING\]:\s*(\w+)/);
@@ -98,7 +102,7 @@ export default function App() {
       setMetrics({
         score: Math.floor(Math.random() * (99 - 92 + 1) + 92).toString(),
         status: 'PHÂN TÍCH XONG',
-        rating: extractedRating
+        rating: extractedRating,
       });
       addToast('Phân tích hoàn tất!');
     } catch (error) {
@@ -148,7 +152,7 @@ export default function App() {
             setYoutubeUrl={setYoutubeUrl}
             optimizedScript={optimizedScript}
             isLoading={isLoading}
-            isFetchingTranscript={isFetchingTranscript}
+            isFetchingTranscript={false}
             metrics={metrics}
             getRatingColor={getRatingColor}
             onOptimize={handleOptimize}
