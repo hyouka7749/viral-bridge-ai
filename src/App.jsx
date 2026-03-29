@@ -46,7 +46,7 @@ export default function App() {
       setScript('');
       setOptimizedScript('');
       try {
-        const res = await fetch(`http://localhost:8000/get-transcript?url=${encodeURIComponent(youtubeUrl)}`);
+        const res = await fetch(`/api/get-transcript?url=${encodeURIComponent(youtubeUrl)}`);
         const data = await res.json();
         if (data.status === "Success") {
           setScript(data.script);
