@@ -39,7 +39,10 @@ class handler(BaseHTTPRequestHandler):
                 try:
                     transcript_list = ytt.list(v_id)
                     first = next(iter(transcript_list))
-                    fetched = first.translate('en').fetch()
+                    try:
+                        fetched = first.translate('en').fetch()
+                    except Exception:
+                        fetched = first.fetch()
                 except Exception:
                     self.wfile.write(json.dumps({
                         "status": "Error",

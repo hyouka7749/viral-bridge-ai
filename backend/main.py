@@ -66,7 +66,10 @@ async def get_transcript(url: str):
                 transcript_list = ytt.list(v_id)
                 # Lấy transcript đầu tiên có sẵn rồi translate sang en
                 first = next(iter(transcript_list))
-                fetched = first.translate('en').fetch()
+                try:
+                    fetched = first.translate('en').fetch()
+                except Exception:
+                    fetched = first.fetch()
             except Exception:
                 return {"status": "Error", "message": "Video không có phụ đề hoặc không thể dịch sang tiếng Anh."}
 
