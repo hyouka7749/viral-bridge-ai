@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import EditorArea from './components/EditorArea';
@@ -15,6 +14,7 @@ export default function App() {
   const [activeMode, setActiveMode] = useState('GENERAL');
   const [script, setScript] = useState('');
   const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [segmentCount, setSegmentCount] = useState(3);
   const [optimizedScript, setOptimizedScript] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -43,18 +43,14 @@ export default function App() {
     return () => clearTimeout(debounceRef.current);
   }, [youtubeUrl]);
 
-  // Ctrl+Enter
-  useEffect(() => {
-    const handler = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleOptimize();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [youtubeUrl, script, isLoading]);
-
-  const handleOptimize = async () => {
+  const handleOptimize = useCallback(async () => {
     const hasUrl = YT_REGEX.test(youtubeUrl);
     const hasScript = script.trim().length > 0;
+    const normalizedSegmentCount = (() => {
+      const n = Number.parseInt(String(segmentCount), 10);
+      if (!Number.isFinite(n)) return 3;
+      return Math.min(10, Math.max(1, n));
+    })();
 
     if (!hasUrl && !hasScript) {
       return addToast('Hãy dán link YouTube hoặc nhập transcript!', 'error');
@@ -64,36 +60,41 @@ export default function App() {
     setOptimizedScript('');
 
     try {
-      const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
-      const model = genAI.getGenerativeModel({
-        model: 'gemini-flash-lite-latest',
-        systemInstruction: PROMPTS[activeMode],
-      });
+      const systemPrompt = `${PROMPTS[activeMode] || ''}\n\nIMPORTANT OVERRIDE:\n- Output up to ${normalizedSegmentCount} segments (not 3).\n- Keep ALL constraints (especially 60–180s). If you cannot find enough segments that qualify, output only the ones that do.\n- Update the segment header numbering to match [1/${normalizedSegmentCount}], [2/${normalizedSegmentCount}], etc.`;
 
-      let contentParts;
-
+      let transcript = script;
       if (hasUrl && !hasScript) {
-        // Gửi YouTube URL trực tiếp cho Gemini — nó tự lấy transcript
-        contentParts = [
-          {
-            fileData: {
-              mimeType: 'video/mp4',
-              fileUri: youtubeUrl,
-            },
-          },
-          {
-            text: 'Analyze this YouTube video and identify the best viral segments based on its transcript/content.',
-          },
-        ];
-      } else {
-        // Dùng transcript đã có (nhập tay hoặc từ lần trước)
-        contentParts = [
-          { text: `Analyze this transcript:\n\n${script}` },
-        ];
+        const res = await fetch(`/api/get-transcript?url=${encodeURIComponent(youtubeUrl)}`);
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.message || 'Không thể lấy transcript.');
+        if (!data || data.status !== 'Success') throw new Error(data?.message || 'Không thể lấy transcript.');
+        transcript = String(data.script || '');
+        setScript(transcript);
       }
 
-      const result = await model.generateContent(contentParts);
-      const responseText = result.response.text();
+      const userPrompt = `Analyze this transcript and output up to ${normalizedSegmentCount} segments:\n\n${transcript}`;
+
+      const dsRes = await fetch('/api/deepseek-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          stream: false,
+        }),
+      });
+
+      const dsJson = await dsRes.json().catch(() => null);
+      if (!dsRes.ok) {
+        const msg = dsJson?.error?.message || dsJson?.message || 'DeepSeek lỗi.';
+        throw new Error(msg);
+      }
+
+      const responseText = dsJson?.choices?.[0]?.message?.content;
+      if (!responseText || typeof responseText !== 'string') throw new Error('DeepSeek không trả về nội dung.');
 
       const ratingMatch = responseText.match(/\[RATING\]:\s*(\w+)/);
       const extractedRating = ratingMatch ? ratingMatch[1].toUpperCase() : 'A';
@@ -112,7 +113,15 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [youtubeUrl, script, segmentCount, activeMode, addToast]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleOptimize();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleOptimize]);
 
   const getRatingColor = (r) => {
     if (r === 'S') return 'text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.3)]';
@@ -123,6 +132,79 @@ export default function App() {
   const handleCopy = () => {
     navigator.clipboard.writeText(optimizedScript);
     addToast('Đã copy kịch bản!');
+  };
+
+  const downloadTextFile = (filename, text, mimeType) => {
+    const blob = new Blob([text], { type: mimeType || 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const parseSegmentsFromMarkdown = (markdown) => {
+    const text = String(markdown || '').trim();
+    if (!text) return [];
+
+    const headerRe = /^###\s*🎬\s*PHÂN\s*ĐOẠN\s*\[[^\]]+\]\s*—\s*(.+)$/gim;
+    const matches = [...text.matchAll(headerRe)];
+    if (matches.length === 0) return [];
+
+    const segments = [];
+    for (let i = 0; i < matches.length; i++) {
+      const startIndex = matches[i].index;
+      const endIndex = i + 1 < matches.length ? matches[i + 1].index : text.length;
+      const block = text.slice(startIndex, endIndex).trim();
+      const title = (matches[i][1] || '').trim();
+
+      const timeMatch = block.match(/\*\s*⏰\s*\*\*Thời gian:\*\*\s*([0-9]{1,2}:[0-9]{2})\s*→\s*([0-9]{1,2}:[0-9]{2})/i);
+      const durationMatch = block.match(/\*\s*⏱️\s*\*\*Thời lượng:\*\*\s*\[?(\d+)\s*s\]?/i);
+      const firstMatch = block.match(/\*\s*🟢\s*\*\*Câu đầu:\*\*\s*["“](.+?)["”]/i);
+      const lastMatch = block.match(/\*\s*🔴\s*\*\*Câu cuối:\*\*\s*["“](.+?)["”]/i);
+      const hookMatch = block.match(/\*\s*🪝\s*\*\*Hook.*?:\*\*\s*(.+)\s*$/im);
+      const captionMatch = block.match(/\*\s*📝\s*\*\*Caption:\*\*\s*(.+)\s*$/im);
+      const hashtagsMatch = block.match(/\*\s*#️⃣\s*\*\*Hashtags:\*\*\s*(.+)\s*$/im);
+
+      segments.push({
+        title: title || null,
+        timeStart: timeMatch ? timeMatch[1] : null,
+        timeEnd: timeMatch ? timeMatch[2] : null,
+        durationSeconds: durationMatch ? Number(durationMatch[1]) : null,
+        firstLine: firstMatch ? firstMatch[1] : null,
+        lastLine: lastMatch ? lastMatch[1] : null,
+        hookText: hookMatch ? hookMatch[1].trim() : null,
+        caption: captionMatch ? captionMatch[1].trim() : null,
+        hashtags: hashtagsMatch ? hashtagsMatch[1].trim() : null,
+        markdown: block,
+      });
+    }
+    return segments;
+  };
+
+  const handleExportMarkdown = () => {
+    if (!optimizedScript.trim()) return addToast('Chưa có kết quả để xuất!', 'error');
+    const safeMode = String(activeMode || 'RESULT').toLowerCase();
+    const iso = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    downloadTextFile(`viral-segments_${safeMode}_${iso}.md`, optimizedScript, 'text/markdown;charset=utf-8');
+    addToast('Đã xuất file Markdown (.md)!');
+  };
+
+  const handleExportJson = () => {
+    if (!optimizedScript.trim()) return addToast('Chưa có kết quả để xuất!', 'error');
+    const segments = parseSegmentsFromMarkdown(optimizedScript);
+    const payload = {
+      activeMode,
+      rating: metrics.rating,
+      exportedAt: new Date().toISOString(),
+      segments,
+    };
+    const iso = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    downloadTextFile(`viral-segments_${String(activeMode || 'RESULT').toLowerCase()}_${iso}.json`, JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
+    addToast('Đã xuất file JSON (.json)!');
   };
 
   return (
@@ -150,6 +232,8 @@ export default function App() {
             setScript={setScript}
             youtubeUrl={youtubeUrl}
             setYoutubeUrl={setYoutubeUrl}
+            segmentCount={segmentCount}
+            setSegmentCount={setSegmentCount}
             optimizedScript={optimizedScript}
             isLoading={isLoading}
             isFetchingTranscript={false}
@@ -157,6 +241,8 @@ export default function App() {
             getRatingColor={getRatingColor}
             onOptimize={handleOptimize}
             onCopy={handleCopy}
+            onExportMarkdown={handleExportMarkdown}
+            onExportJson={handleExportJson}
           />
         )}
       </main>

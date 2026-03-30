@@ -82,7 +82,7 @@ const Sidebar = ({ activeMode, setActiveMode, isOpen, onClose }) => (
           />
         ))}
         <div className="px-3 pt-3 space-y-1.5">
-          <p className="text-[12px] text-slate-600">HaSecTool v3.1 · Gemini 2.0 Flash</p>
+          <p className="text-[12px] text-slate-600">HaSecTool v3.1 · DeepSeek Chat</p>
           <p className="text-[11px] text-slate-600 leading-relaxed">
             💸 Thiếu tiền nên dùng AI chậm — hãy donate cho Hà để có tiền nâng cấp AI xịn hơn :))
           </p>

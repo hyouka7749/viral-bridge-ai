@@ -4,8 +4,8 @@ const steps = [
   {
     icon: <Link2 size={20} />,
     title: 'Dán link YouTube',
-    desc: 'Paste link video YouTube vào ô nhập. Gemini AI sẽ tự đọc nội dung video và phân tích.',
-    tip: 'Không cần phụ đề — Gemini hiểu trực tiếp từ video.',
+    desc: 'Paste link video YouTube vào ô nhập. Hệ thống sẽ tự lấy transcript và phân tích bằng DeepSeek.',
+    tip: 'Nếu video không có phụ đề hoặc bị chặn transcript, hãy dán transcript thủ công.',
   },
   {
     icon: <Sparkles size={20} />,

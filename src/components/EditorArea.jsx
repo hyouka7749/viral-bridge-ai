@@ -3,16 +3,20 @@ import ReactMarkdown from 'react-markdown';
 import {
   AlignLeft, CheckCircle2, Copy, Check,
   Scissors, Star, Play, Loader2, Sparkles, Keyboard,
+  Download,
 } from 'lucide-react';
 
 const EditorArea = ({
   script, setScript,
   youtubeUrl, setYoutubeUrl,
+  segmentCount, setSegmentCount,
   optimizedScript,
   isLoading,
   metrics,
   getRatingColor, onCopy,
   onOptimize,
+  onExportMarkdown,
+  onExportJson,
 }) => {
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState('input'); // mobile tab: 'input' | 'result'
@@ -37,6 +41,28 @@ const EditorArea = ({
           value={youtubeUrl}
           onChange={(e) => setYoutubeUrl(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && onOptimize()}
+        />
+      </div>
+
+      <div className="bg-white/[0.04] border border-white/[0.09] rounded-2xl flex items-center gap-3 px-4 py-3.5 focus-within:border-indigo-500/50 transition-colors">
+        <Scissors size={16} className="text-indigo-400 shrink-0" />
+        <div className="flex-1">
+          <p className="text-[12px] text-slate-500 font-semibold leading-none mb-1">Số phân đoạn xuất ra</p>
+          <p className="text-[11px] text-slate-700 leading-none">Tối đa 10</p>
+        </div>
+        <input
+          type="number"
+          min={1}
+          max={10}
+          step={1}
+          className="w-20 bg-transparent border border-white/[0.10] rounded-xl px-3 py-2 text-[14px] text-slate-200 outline-none focus:border-indigo-500/50"
+          value={segmentCount}
+          onChange={(e) => {
+            const n = Number.parseInt(e.target.value, 10);
+            if (!Number.isFinite(n)) return;
+            setSegmentCount(Math.min(10, Math.max(1, n)));
+          }}
+          disabled={isLoading}
         />
       </div>
 
@@ -90,14 +116,30 @@ const EditorArea = ({
           <span className="text-xs font-semibold uppercase tracking-widest">AI Content Strategy</span>
         </div>
         {optimizedScript && (
-          <button
-            onClick={handleCopy}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all
-              ${copied ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
-          >
-            {copied ? <Check size={13} /> : <Copy size={13} />}
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onExportJson}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-500 hover:text-slate-300 hover:bg-white/5"
+            >
+              <Download size={13} />
+              JSON
+            </button>
+            <button
+              onClick={onExportMarkdown}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-500 hover:text-slate-300 hover:bg-white/5"
+            >
+              <Download size={13} />
+              MD
+            </button>
+            <button
+              onClick={handleCopy}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all
+                ${copied ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+            >
+              {copied ? <Check size={13} /> : <Copy size={13} />}
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
         )}
       </div>
 
