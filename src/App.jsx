@@ -75,6 +75,23 @@ export default function App() {
     return () => unsub?.unsubscribe?.();
   }, [refreshAnalyses]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = String(window.location.hash || '');
+    if (hash.includes('type=recovery') && window.location.pathname !== '/reset-password') {
+      window.location.replace(`/reset-password${hash}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!session?.user) return;
+    const hash = String(window.location.hash || '');
+    if (hash.includes('access_token=')) {
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    }
+  }, [session]);
+
   // Khi paste URL hợp lệ → clear kết quả cũ
   useEffect(() => {
     clearTimeout(debounceRef.current);
