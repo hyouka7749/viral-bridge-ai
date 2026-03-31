@@ -13,6 +13,7 @@ const EditorArea = ({
   segmentCount, setSegmentCount,
   optimizedScript,
   isLoading,
+  isFetchingTranscript,
   metrics,
   getRatingColor, onCopy,
   onOptimize,
@@ -115,6 +116,7 @@ const EditorArea = ({
           value={youtubeUrl}
           onChange={(e) => setYoutubeUrl(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && onOptimize()}
+          disabled={isLoading || isFetchingTranscript}
         />
       </div>
 
@@ -162,20 +164,20 @@ const EditorArea = ({
           placeholder="Tuỳ chọn: dán transcript thủ công, hoặc để trống và dùng link YouTube ở trên..."
           value={script}
           onChange={(e) => setScript(e.target.value)}
-          disabled={isLoading}
+          disabled={isLoading || isFetchingTranscript}
         />
       </div>
 
       {/* Analyze button */}
       <button
         onClick={onOptimize}
-        disabled={isLoading || (!youtubeUrl && !script.trim())}
+        disabled={isLoading || isFetchingTranscript || (!youtubeUrl && !script.trim())}
         className="w-full py-4 rounded-2xl font-semibold text-[15px] flex items-center justify-center gap-2.5 transition-all
           bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 active:scale-[0.98]
           disabled:bg-white/5 disabled:text-slate-600 disabled:shadow-none disabled:cursor-not-allowed"
       >
-        {isLoading ? <Loader2 size={17} className="animate-spin" /> : <Sparkles size={17} />}
-        {isLoading ? 'Đang phân tích...' : 'Phân tích phân đoạn hay'}
+        {(isLoading || isFetchingTranscript) ? <Loader2 size={17} className="animate-spin" /> : <Sparkles size={17} />}
+        {isFetchingTranscript ? 'Đang lấy transcript...' : isLoading ? 'Đang phân tích...' : 'Phân tích phân đoạn hay'}
       </button>
     </div>
   );

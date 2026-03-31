@@ -20,6 +20,7 @@ export default function App() {
   const [segmentCount, setSegmentCount] = useState(3);
   const [optimizedScript, setOptimizedScript] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingTranscript, setIsFetchingTranscript] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [metrics, setMetrics] = useState({ score: '--', status: 'READY', rating: 'N/A' });
   const [toasts, setToasts] = useState([]);
@@ -28,6 +29,8 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [analyses, setAnalyses] = useState([]);
   const debounceRef = useRef(null);
+  const autoOptimizeRef = useRef(null);
+  const lastAutoOptimizedUrlRef = useRef('');
 
   const isResetPasswordRoute = (() => {
     if (typeof window === 'undefined') return false;
@@ -203,6 +206,7 @@ export default function App() {
       setScript('');
       setOptimizedScript('');
       setMetrics({ score: '--', status: 'READY', rating: 'N/A' });
+      lastAutoOptimizedUrlRef.current = '';
     }, 300);
     return () => clearTimeout(debounceRef.current);
   }, [youtubeUrl]);
@@ -214,6 +218,7 @@ export default function App() {
     if (!activeProjectId) {
       return addToast('Chọn project trước khi phân tích.', 'error');
     }
+    if (isFetchingTranscript) return;
 
     const hasUrl = YT_REGEX.test(youtubeUrl);
     const hasScript = script.trim().length > 0;
@@ -235,16 +240,37 @@ export default function App() {
 
       let transcript = script;
       if (hasUrl && !hasScript) {
-        const res = await fetch(`/api/get-transcript?url=${encodeURIComponent(youtubeUrl)}`);
-        const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(data?.message || 'Không thể lấy transcript.');
-        if (!data || data.status !== 'Success') throw new Error(data?.message || 'Không thể lấy transcript.');
-        transcript = String(data.script || '');
-        setScript(transcript);
+        setIsFetchingTranscript(true);
+        setMetrics((prev) => ({ ...prev, status: 'ĐANG LẤY TRANSCRIPT' }));
+        try {
+          let cached = null;
+          if (supabase) {
+            const { data: cachedVideo } = await supabase
+              .from('videos')
+              .select('transcript')
+              .eq('project_id', activeProjectId)
+              .eq('youtube_url', youtubeUrl)
+              .maybeSingle();
+            if (cachedVideo?.transcript) cached = String(cachedVideo.transcript);
+          }
+          if (cached) {
+            transcript = cached;
+          } else {
+            const res = await fetch(`/api/get-transcript?url=${encodeURIComponent(youtubeUrl)}`);
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(data?.message || 'Không thể lấy transcript.');
+            if (!data || data.status !== 'Success') throw new Error(data?.message || 'Không thể lấy transcript.');
+            transcript = String(data.script || '');
+          }
+          setScript(transcript);
+        } finally {
+          setIsFetchingTranscript(false);
+        }
       }
 
       const userPrompt = `Analyze this transcript and output up to ${normalizedSegmentCount} segments:\n\n${transcript}`;
 
+      setMetrics((prev) => ({ ...prev, status: 'ĐANG PHÂN TÍCH' }));
       const dsRes = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -364,8 +390,28 @@ export default function App() {
       addToast(error.message || 'Đã xảy ra lỗi!', 'error');
     } finally {
       setIsLoading(false);
+      setIsFetchingTranscript(false);
     }
-  }, [session, activeProjectId, youtubeUrl, script, segmentCount, activeMode, addToast, refreshAnalyses]);
+  }, [session, activeProjectId, youtubeUrl, script, segmentCount, activeMode, addToast, refreshAnalyses, isFetchingTranscript]);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    if (!activeProjectId) return;
+    if (activeMode === 'GUIDE') return;
+    if (isResetPasswordRoute) return;
+    if (!YT_REGEX.test(youtubeUrl)) return;
+    if (isLoading || isFetchingTranscript) return;
+    if (optimizedScript.trim()) return;
+    if (lastAutoOptimizedUrlRef.current === youtubeUrl) return;
+
+    clearTimeout(autoOptimizeRef.current);
+    autoOptimizeRef.current = setTimeout(() => {
+      lastAutoOptimizedUrlRef.current = youtubeUrl;
+      handleOptimize();
+    }, 700);
+
+    return () => clearTimeout(autoOptimizeRef.current);
+  }, [session, activeProjectId, activeMode, youtubeUrl, optimizedScript, isLoading, isFetchingTranscript, isResetPasswordRoute, handleOptimize]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -513,7 +559,7 @@ export default function App() {
             setSegmentCount={setSegmentCount}
             optimizedScript={optimizedScript}
             isLoading={isLoading}
-            isFetchingTranscript={false}
+            isFetchingTranscript={isFetchingTranscript}
             metrics={metrics}
             getRatingColor={getRatingColor}
             onOptimize={handleOptimize}
