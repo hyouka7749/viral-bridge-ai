@@ -4,6 +4,7 @@ import {
   AlignLeft, CheckCircle2, Copy, Check,
   Scissors, Star, Play, Loader2, Sparkles, Keyboard,
   Download,
+  Plus,
 } from 'lucide-react';
 
 const EditorArea = ({
@@ -20,9 +21,16 @@ const EditorArea = ({
   userEmail,
   analyses,
   onLoadAnalysis,
+  projects,
+  activeProjectId,
+  onSetActiveProjectId,
+  onCreateProject,
 }) => {
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState('input'); // mobile tab: 'input' | 'result'
+  const [isProjectFormOpen, setIsProjectFormOpen] = useState(false);
+  const [isProjectCreating, setIsProjectCreating] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
   const wordCount = script.trim() ? script.trim().split(/\s+/).length : 0;
 
   const handleCopy = () => {
@@ -33,6 +41,69 @@ const EditorArea = ({
 
   const inputPanel = (
     <div className="flex flex-col gap-3 h-full">
+      {Array.isArray(projects) && projects.length > 0 && (
+        <div className="bg-white/[0.04] border border-white/[0.09] rounded-2xl flex items-center gap-3 px-4 py-3.5 focus-within:border-indigo-500/50 transition-colors">
+          <div className="flex-1">
+            <p className="text-[12px] text-slate-500 font-semibold leading-none mb-1">Project</p>
+            <p className="text-[11px] text-slate-700 leading-none">Lưu theo workspace</p>
+          </div>
+          <select
+            value={activeProjectId || ''}
+            onChange={(e) => onSetActiveProjectId?.(e.target.value)}
+            className="bg-white/[0.03] border border-white/[0.10] rounded-xl px-3 py-2 text-[13px] text-slate-200 outline-none focus:border-indigo-500/50 max-w-[260px]"
+            disabled={isLoading}
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id} className="bg-[#0b1020]">
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setIsProjectFormOpen((v) => !v)}
+            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+            disabled={isLoading}
+            aria-label="Create project"
+          >
+            <Plus size={18} />
+          </button>
+        </div>
+      )}
+
+      {isProjectFormOpen && (
+        <div className="bg-white/[0.03] border border-white/[0.08] rounded-2xl px-4 py-3 flex items-center gap-3">
+          <input
+            type="text"
+            className="flex-1 bg-transparent border border-white/[0.10] rounded-xl px-3 py-2 text-[13px] text-slate-200 outline-none focus:border-indigo-500/50"
+            placeholder="Tên project..."
+            value={newProjectName}
+            onChange={(e) => setNewProjectName(e.target.value)}
+            disabled={isLoading || isProjectCreating}
+          />
+          <button
+            type="button"
+            onClick={async () => {
+              const name = newProjectName.trim();
+              if (!name) return;
+              setIsProjectCreating(true);
+              try {
+                await onCreateProject?.(name);
+                setNewProjectName('');
+                setIsProjectCreating(false);
+                setIsProjectFormOpen(false);
+              } catch {
+                setIsProjectCreating(false);
+              }
+            }}
+            className="px-4 py-2 rounded-xl text-[13px] font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:bg-white/5 disabled:text-slate-600 disabled:cursor-not-allowed"
+            disabled={isLoading || !newProjectName.trim() || isProjectCreating}
+          >
+            Tạo
+          </button>
+        </div>
+      )}
+
       {/* YouTube URL */}
       <div className="bg-white/[0.04] border border-white/[0.09] rounded-2xl flex items-center gap-3 px-4 py-3.5 focus-within:border-indigo-500/50 transition-colors">
         <Play size={17} fill="currentColor" className="text-red-500 shrink-0" />

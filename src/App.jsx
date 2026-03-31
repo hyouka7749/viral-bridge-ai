@@ -24,6 +24,8 @@ export default function App() {
   const [metrics, setMetrics] = useState({ score: '--', status: 'READY', rating: 'N/A' });
   const [toasts, setToasts] = useState([]);
   const [session, setSession] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [activeProjectId, setActiveProjectId] = useState(null);
   const [analyses, setAnalyses] = useState([]);
   const debounceRef = useRef(null);
 
@@ -41,23 +43,117 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const refreshAnalyses = useCallback(async (userId) => {
+  const setActiveProjectIdAndPersist = useCallback((id) => {
+    setActiveProjectId(id);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('activeProjectId', id || '');
+    }
+  }, []);
+
+  const refreshProjects = useCallback(async (userId) => {
     if (!supabase || !userId) return;
     const { data, error } = await supabase
+      .from('projects')
+      .select('id, created_at, name')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      const msg = String(error.message || '');
+      if (msg.includes('relation') && msg.includes('projects')) {
+        addToast('Chưa tạo bảng projects trên Supabase. Hãy tạo table + bật RLS/policy trước.', 'error');
+      }
+      return;
+    }
+
+    const list = data || [];
+    if (list.length === 0) {
+      const { data: created, error: createErr } = await supabase
+        .from('projects')
+        .insert({ user_id: userId, name: 'Default' })
+        .select('id, created_at, name')
+        .single();
+      if (createErr) {
+        const msg2 = String(createErr.message || '');
+        if (msg2.includes('new row violates row-level security policy')) {
+          addToast('Supabase RLS đang chặn insert. Hãy bật policy insert/select cho bảng projects.', 'error');
+        }
+        setProjects([]);
+        return;
+      }
+      setProjects([created]);
+      setActiveProjectIdAndPersist(created.id);
+      return;
+    }
+
+    setProjects(list);
+
+    const stored = typeof window !== 'undefined' ? window.localStorage.getItem('activeProjectId') : null;
+    const storedValid = stored && list.some((p) => p.id === stored);
+    if (storedValid) {
+      setActiveProjectId(stored);
+      return;
+    }
+    if (list[0]?.id) setActiveProjectIdAndPersist(list[0].id);
+  }, [addToast, setActiveProjectIdAndPersist]);
+
+  const createProject = useCallback(async (name) => {
+    if (!supabase || !session?.user) return;
+    const { data, error } = await supabase
+      .from('projects')
+      .insert({ user_id: session.user.id, name })
+      .select('id, created_at, name')
+      .single();
+    if (error) {
+      const msg = String(error.message || '');
+      if (msg.includes('new row violates row-level security policy')) {
+        addToast('Supabase RLS đang chặn insert. Hãy bật policy insert/select cho bảng projects.', 'error');
+      } else if (msg.includes('relation') && msg.includes('projects')) {
+        addToast('Chưa tạo bảng projects trên Supabase. Hãy tạo table + bật RLS/policy trước.', 'error');
+      } else {
+        addToast(msg || 'Không thể tạo project.', 'error');
+      }
+      throw error;
+    }
+    const nextProjects = [...projects, data].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    setProjects(nextProjects);
+    setActiveProjectIdAndPersist(data.id);
+    addToast('Đã tạo project!');
+  }, [addToast, projects, session, setActiveProjectIdAndPersist]);
+
+  const refreshAnalyses = useCallback(async (userId) => {
+    if (!supabase || !userId) return;
+    let query = supabase
       .from('analyses')
-      .select('id, created_at, mode, youtube_url, transcript, segment_count, result_md, rating')
+      .select('id, created_at, mode, youtube_url, transcript, segment_count, result_md, rating, project_id, video_id')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(20);
+    if (activeProjectId) query = query.eq('project_id', activeProjectId);
+    const { data, error } = await query;
     if (error) {
       const msg = String(error.message || '');
       if (msg.includes('relation') && msg.includes('analyses')) {
         addToast('Chưa tạo bảng analyses trên Supabase. Hãy tạo table + bật RLS/policy trước.', 'error');
+      } else if (msg.includes('column') && msg.includes('project_id')) {
+        const { data: legacyData, error: legacyErr } = await supabase
+          .from('analyses')
+          .select('id, created_at, mode, youtube_url, transcript, segment_count, result_md, rating')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(20);
+        if (legacyErr) {
+          addToast('Bảng analyses chưa có cột project_id/video_id. Hãy chạy SQL ALTER TABLE để thêm cột.', 'error');
+          return;
+        }
+        setAnalyses(legacyData || []);
+        addToast('Chưa migrate analyses theo project. Đang hiển thị lịch sử tổng.', 'error');
+        return;
       }
       return;
     }
     setAnalyses(data || []);
-  }, [addToast]);
+  }, [activeProjectId, addToast]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -65,15 +161,22 @@ export default function App() {
     supabase.auth.getSession().then(({ data }) => {
       const nextSession = data?.session || null;
       setSession(nextSession);
+      refreshProjects(nextSession?.user?.id);
       refreshAnalyses(nextSession?.user?.id);
     });
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
+      refreshProjects(nextSession?.user?.id);
       refreshAnalyses(nextSession?.user?.id);
     });
     unsub = data?.subscription;
     return () => unsub?.unsubscribe?.();
-  }, [refreshAnalyses]);
+  }, [refreshAnalyses, refreshProjects]);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    refreshAnalyses(session.user.id);
+  }, [activeProjectId, refreshAnalyses, session]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -107,6 +210,9 @@ export default function App() {
   const handleOptimize = useCallback(async () => {
     if (!session?.user) {
       return addToast('Bạn cần đăng nhập để phân tích và lưu lịch sử.', 'error');
+    }
+    if (!activeProjectId) {
+      return addToast('Chọn project trước khi phân tích.', 'error');
     }
 
     const hasUrl = YT_REGEX.test(youtubeUrl);
@@ -171,21 +277,79 @@ export default function App() {
         rating: extractedRating,
       });
       if (supabase) {
-        const { error } = await supabase.from('analyses').insert({
+        let videoId = null;
+        if (youtubeUrl) {
+          try {
+            const { data: existingVideo, error: findErr } = await supabase
+              .from('videos')
+              .select('id')
+              .eq('project_id', activeProjectId)
+              .eq('youtube_url', youtubeUrl)
+              .maybeSingle();
+            if (findErr) throw findErr;
+
+            if (existingVideo?.id) {
+              videoId = existingVideo.id;
+              await supabase
+                .from('videos')
+                .update({ transcript: transcript || null })
+                .eq('id', videoId);
+            } else {
+              const { data: newVideo, error: insertErr } = await supabase
+                .from('videos')
+                .insert({ project_id: activeProjectId, youtube_url: youtubeUrl, transcript: transcript || null })
+                .select('id')
+                .single();
+              if (insertErr) throw insertErr;
+              if (newVideo?.id) videoId = newVideo.id;
+            }
+          } catch (err) {
+            const msg = String(err?.message || '');
+            if (msg.includes('relation') && msg.includes('videos')) {
+              addToast('Chưa tạo bảng videos trên Supabase. Bạn vẫn có thể lưu analyses, nhưng sẽ không nhóm theo video.', 'error');
+            } else if (msg.includes('new row violates row-level security policy')) {
+              addToast('Supabase RLS đang chặn insert/select bảng videos. Hãy bật policy.', 'error');
+            } else if (msg) {
+              addToast(msg, 'error');
+            }
+          }
+        }
+
+        const insertPayload = {
           user_id: session.user.id,
+          project_id: activeProjectId,
+          video_id: videoId,
           mode: activeMode,
           youtube_url: youtubeUrl || null,
           transcript: transcript || null,
           segment_count: normalizedSegmentCount,
           result_md: responseText,
           rating: extractedRating,
-        });
+        };
+        let { error } = await supabase.from('analyses').insert(insertPayload);
         if (error) {
           const msg = String(error.message || '');
           if (msg.includes('new row violates row-level security policy')) {
             addToast('Supabase RLS đang chặn insert. Hãy bật policy insert/select cho bảng analyses.', 'error');
           } else if (msg.includes('relation') && msg.includes('analyses')) {
             addToast('Chưa tạo bảng analyses trên Supabase. Hãy tạo table + bật RLS/policy trước.', 'error');
+          } else if (msg.includes('column') && msg.includes('project_id')) {
+            ({ error } = await supabase.from('analyses').insert({
+              user_id: session.user.id,
+              mode: activeMode,
+              youtube_url: youtubeUrl || null,
+              transcript: transcript || null,
+              segment_count: normalizedSegmentCount,
+              result_md: responseText,
+              rating: extractedRating,
+            }));
+            if (error) {
+              addToast('Bảng analyses chưa có cột project_id/video_id. Hãy chạy SQL ALTER TABLE để thêm cột.', 'error');
+            } else {
+              addToast('Chưa migrate analyses theo project. Đã lưu lịch sử (không gắn project).', 'error');
+              refreshAnalyses(session.user.id);
+            }
+            return;
           } else {
             addToast(msg || 'Không thể lưu lịch sử.', 'error');
           }
@@ -201,7 +365,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [session, youtubeUrl, script, segmentCount, activeMode, addToast, refreshAnalyses]);
+  }, [session, activeProjectId, youtubeUrl, script, segmentCount, activeMode, addToast, refreshAnalyses]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -304,6 +468,7 @@ export default function App() {
   const handleLoadAnalysis = (id) => {
     const a = analyses.find((x) => x.id === id);
     if (!a) return;
+    if (a.project_id) setActiveProjectIdAndPersist(a.project_id);
     setActiveMode(a.mode || 'GENERAL');
     setYoutubeUrl(a.youtube_url || '');
     setScript(a.transcript || '');
@@ -358,6 +523,10 @@ export default function App() {
             userEmail={session?.user?.email || null}
             analyses={analyses}
             onLoadAnalysis={handleLoadAnalysis}
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSetActiveProjectId={setActiveProjectIdAndPersist}
+            onCreateProject={createProject}
           />
         )}
       </main>
