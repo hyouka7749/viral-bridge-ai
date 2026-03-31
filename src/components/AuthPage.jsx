@@ -64,7 +64,7 @@ export default function AuthPage({ supabase, onToast }) {
     if (!email.trim()) return onToast('Nhập email để gửi link đặt lại mật khẩu.', 'error');
     setIsLoading(true);
     try {
-      const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/` : undefined;
+      const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/reset-password` : undefined;
       const { error } = await supabase.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined);
       if (error) throw error;
       onToast('Đã gửi email đặt lại mật khẩu!');

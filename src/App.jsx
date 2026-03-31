@@ -4,6 +4,7 @@ import Header from './components/Header';
 import EditorArea from './components/EditorArea';
 import GuidePage from './components/GuidePage';
 import AuthPage from './components/AuthPage';
+import ResetPasswordPage from './components/ResetPasswordPage';
 import Toast from './components/Toast';
 import { PROMPTS } from './constants/prompts';
 import { supabase } from './lib/supabaseClient';
@@ -26,9 +27,9 @@ export default function App() {
   const [analyses, setAnalyses] = useState([]);
   const debounceRef = useRef(null);
 
-  const isRecovery = (() => {
+  const isResetPasswordRoute = (() => {
     if (typeof window === 'undefined') return false;
-    return String(window.location.hash || '').includes('type=recovery') || String(window.location.hash || '').includes('type=magiclink');
+    return window.location.pathname === '/reset-password';
   })();
 
   const addToast = useCallback((message, type = 'success') => {
@@ -314,8 +315,8 @@ export default function App() {
           onSignOut={session?.user ? handleSignOut : null}
         />
 
-        {isRecovery ? (
-          <AuthPage supabase={supabase} onToast={addToast} />
+        {isResetPasswordRoute ? (
+          <ResetPasswordPage supabase={supabase} onToast={addToast} />
         ) : activeMode === 'GUIDE' ? (
           <GuidePage />
         ) : !session?.user ? (
