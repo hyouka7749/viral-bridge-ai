@@ -3,13 +3,11 @@ import os
 import json
 import urllib.request
 import urllib.error
-import html
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-from defusedxml import ElementTree
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # Local development server — trên Vercel dùng api/get-transcript.py
 def _load_dotenv(path: str):
@@ -46,60 +44,8 @@ app.add_middleware(
 
 
 def get_video_id(url: str) -> str | None:
-    match = re.search(r'(?:v=|\/|be\/|embed\/)([0-9A-Za-z_-]{11})(?:[&?]|$)', url)
+    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)', url)
     return match.group(1) if match else None
-
-
-def _fmt_ts(seconds: float) -> str:
-    s = int(seconds)
-    return f"{s // 60:02d}:{s % 60:02d}"
-
-
-def _fetch_timedtext(video_id: str, lang: str, kind_asr: bool):
-    qs = f"v={video_id}&lang={lang}"
-    if kind_asr:
-        qs += "&kind=asr"
-    url = f"https://www.youtube.com/api/timedtext?{qs}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "text/xml,application/xml;q=0.9,*/*;q=0.8",
-        },
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=25) as resp:
-        raw = resp.read().decode("utf-8", errors="ignore").strip()
-        if not raw:
-            return []
-        root = ElementTree.fromstring(raw)
-        items = []
-        for node in root.findall("text"):
-            start = node.attrib.get("start")
-            if start is None:
-                continue
-            try:
-                start_f = float(start)
-            except Exception:
-                continue
-            text = node.text or ""
-            text = html.unescape(text).replace("\n", " ").strip()
-            if text:
-                items.append((start_f, text))
-        return items
-
-
-def _transcript_from_timedtext(video_id: str):
-    langs = ["en", "en-US", "vi"]
-    for lang in langs:
-        for kind_asr in (False, True):
-            try:
-                items = _fetch_timedtext(video_id, lang, kind_asr)
-            except Exception:
-                items = []
-            if items:
-                return "\n".join([f"[{_fmt_ts(s)}] {t}" for s, t in items])
-    return None
 
 
 @app.get("/get-transcript")
@@ -109,33 +55,28 @@ async def get_transcript(url: str):
         return {"status": "Error", "message": "Link YouTube không hợp lệ."}
 
     try:
+        ytt = YouTubeTranscriptApi()
+
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(v_id)
+            fetched = ytt.fetch(v_id, languages=['en'])
+        except Exception:
             try:
-                transcript = transcript_list.find_transcript(['en', 'en-US', 'vi'])
-            except NoTranscriptFound:
+                transcript_list = ytt.list(v_id)
                 first = next(iter(transcript_list))
                 try:
-                    transcript = first.translate('en')
+                    fetched = first.translate('en').fetch()
                 except Exception:
-                    transcript = first
+                    fetched = first.fetch()
+            except Exception:
+                return {"status": "Error", "message": "Video không có phụ đề hoặc không thể dịch sang tiếng Anh."}
 
-            fetched = transcript.fetch()
-            lines = [f"[{_fmt_ts(float(e['start']))}] {e['text']}" for e in fetched if 'start' in e and 'text' in e]
-            return {"status": "Success", "video_id": v_id, "script": "\n".join(lines)}
-        except TranscriptsDisabled:
-            pass
-        except Exception:
-            pass
-
-        script = _transcript_from_timedtext(v_id)
-        if script:
-            return {"status": "Success", "video_id": v_id, "script": script}
-
-        return {"status": "Error", "message": "Không thể lấy transcript từ YouTube. Hãy dán transcript thủ công."}
+        lines = [f"[{int(e.start//60):02d}:{int(e.start%60):02d}] {e.text}" for e in fetched]
+        return {"status": "Success", "script": "\n".join(lines)}
 
     except Exception as e:
         return {"status": "Error", "message": str(e)}
+
+
 
 
 @app.post("/deepseek-chat")
