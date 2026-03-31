@@ -5,12 +5,12 @@ import urllib.request
 import urllib.error
 import json
 import html
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from defusedxml import ElementTree
 
 
 def get_video_id(url: str):
-    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)', url)
+    match = re.search(r'(?:v=|\/|be\/|embed\/)([0-9A-Za-z_-]{11})(?:[&?]|$)', url)
     return match.group(1) if match else None
 
 
@@ -73,7 +73,7 @@ class handler(BaseHTTPRequestHandler):
         url = params.get('url', [None])[0]
 
         self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
 
@@ -87,38 +87,39 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            ytt = YouTubeTranscriptApi()
-
             try:
-                fetched = ytt.fetch(v_id, languages=['en'])
-            except Exception:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(v_id)
+
                 try:
-                    transcript_list = ytt.list(v_id)
+                    transcript = transcript_list.find_transcript(['en', 'en-US', 'vi'])
+                except NoTranscriptFound:
                     first = next(iter(transcript_list))
                     try:
-                        fetched = first.translate('en').fetch()
+                        transcript = first.translate('en')
                     except Exception:
-                        fetched = first.fetch()
-                except Exception:
-                    fetched = None
+                        transcript = first
 
-            if fetched is not None:
-                lines = [f"[{int(e.start//60):02d}:{int(e.start%60):02d}] {e.text}" for e in fetched]
-                self.wfile.write(json.dumps({"status": "Success", "script": "\n".join(lines)}).encode())
+                fetched = transcript.fetch()
+                lines = [f"[{_fmt_ts(float(e['start']))}] {e['text']}" for e in fetched if 'start' in e and 'text' in e]
+                self.wfile.write(json.dumps({"status": "Success", "video_id": v_id, "script": "\n".join(lines)}, ensure_ascii=False).encode())
                 return
+            except TranscriptsDisabled:
+                pass
+            except Exception:
+                pass
 
             script = _transcript_from_timedtext(v_id)
             if script:
-                self.wfile.write(json.dumps({"status": "Success", "script": script}).encode())
+                self.wfile.write(json.dumps({"status": "Success", "video_id": v_id, "script": script}, ensure_ascii=False).encode())
                 return
 
             self.wfile.write(json.dumps({
                 "status": "Error",
                 "message": "Không thể lấy transcript từ YouTube. Hãy dán transcript thủ công."
-            }).encode())
+            }, ensure_ascii=False).encode())
 
         except Exception as e:
-            self.wfile.write(json.dumps({"status": "Error", "message": str(e)}).encode())
+            self.wfile.write(json.dumps({"status": "Error", "message": str(e)}, ensure_ascii=False).encode())
 
     def do_OPTIONS(self):
         self.send_response(200)

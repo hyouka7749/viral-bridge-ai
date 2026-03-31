@@ -8,7 +8,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from defusedxml import ElementTree
 
 # Local development server — trên Vercel dùng api/get-transcript.py
@@ -46,7 +46,7 @@ app.add_middleware(
 
 
 def get_video_id(url: str) -> str | None:
-    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)', url)
+    match = re.search(r'(?:v=|\/|be\/|embed\/)([0-9A-Za-z_-]{11})(?:[&?]|$)', url)
     return match.group(1) if match else None
 
 
@@ -109,30 +109,28 @@ async def get_transcript(url: str):
         return {"status": "Error", "message": "Link YouTube không hợp lệ."}
 
     try:
-        ytt = YouTubeTranscriptApi()
-
-        # Ưu tiên en, fallback sang ngôn ngữ khác rồi translate
         try:
-            fetched = ytt.fetch(v_id, languages=['en'])
-        except Exception:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(v_id)
             try:
-                transcript_list = ytt.list(v_id)
-                # Lấy transcript đầu tiên có sẵn rồi translate sang en
+                transcript = transcript_list.find_transcript(['en', 'en-US', 'vi'])
+            except NoTranscriptFound:
                 first = next(iter(transcript_list))
                 try:
-                    fetched = first.translate('en').fetch()
+                    transcript = first.translate('en')
                 except Exception:
-                    fetched = first.fetch()
-            except Exception:
-                fetched = None
+                    transcript = first
 
-        if fetched is not None:
-            lines = [f"[{int(e.start//60):02d}:{int(e.start%60):02d}] {e.text}" for e in fetched]
-            return {"status": "Success", "script": "\n".join(lines)}
+            fetched = transcript.fetch()
+            lines = [f"[{_fmt_ts(float(e['start']))}] {e['text']}" for e in fetched if 'start' in e and 'text' in e]
+            return {"status": "Success", "video_id": v_id, "script": "\n".join(lines)}
+        except TranscriptsDisabled:
+            pass
+        except Exception:
+            pass
 
         script = _transcript_from_timedtext(v_id)
         if script:
-            return {"status": "Success", "script": script}
+            return {"status": "Success", "video_id": v_id, "script": script}
 
         return {"status": "Error", "message": "Không thể lấy transcript từ YouTube. Hãy dán transcript thủ công."}
 
