@@ -3,8 +3,10 @@ import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import EditorArea from './components/EditorArea';
 import GuidePage from './components/GuidePage';
+import AuthPage from './components/AuthPage';
 import Toast from './components/Toast';
 import { PROMPTS } from './constants/prompts';
+import { supabase } from './lib/supabaseClient';
 import './App.css';
 
 let toastId = 0;
@@ -20,7 +22,14 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [metrics, setMetrics] = useState({ score: '--', status: 'READY', rating: 'N/A' });
   const [toasts, setToasts] = useState([]);
+  const [session, setSession] = useState(null);
+  const [analyses, setAnalyses] = useState([]);
   const debounceRef = useRef(null);
+
+  const isRecovery = (() => {
+    if (typeof window === 'undefined') return false;
+    return String(window.location.hash || '').includes('type=recovery') || String(window.location.hash || '').includes('type=magiclink');
+  })();
 
   const addToast = useCallback((message, type = 'success') => {
     const id = ++toastId;
@@ -30,6 +39,40 @@ export default function App() {
   const removeToast = useCallback((id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  const refreshAnalyses = useCallback(async (userId) => {
+    if (!supabase || !userId) return;
+    const { data, error } = await supabase
+      .from('analyses')
+      .select('id, created_at, mode, youtube_url, transcript, segment_count, result_md, rating')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (error) {
+      const msg = String(error.message || '');
+      if (msg.includes('relation') && msg.includes('analyses')) {
+        addToast('Chưa tạo bảng analyses trên Supabase. Hãy tạo table + bật RLS/policy trước.', 'error');
+      }
+      return;
+    }
+    setAnalyses(data || []);
+  }, [addToast]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    let unsub = null;
+    supabase.auth.getSession().then(({ data }) => {
+      const nextSession = data?.session || null;
+      setSession(nextSession);
+      refreshAnalyses(nextSession?.user?.id);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      refreshAnalyses(nextSession?.user?.id);
+    });
+    unsub = data?.subscription;
+    return () => unsub?.unsubscribe?.();
+  }, [refreshAnalyses]);
 
   // Khi paste URL hợp lệ → clear kết quả cũ
   useEffect(() => {
@@ -44,6 +87,10 @@ export default function App() {
   }, [youtubeUrl]);
 
   const handleOptimize = useCallback(async () => {
+    if (!session?.user) {
+      return addToast('Bạn cần đăng nhập để phân tích và lưu lịch sử.', 'error');
+    }
+
     const hasUrl = YT_REGEX.test(youtubeUrl);
     const hasScript = script.trim().length > 0;
     const normalizedSegmentCount = (() => {
@@ -105,6 +152,29 @@ export default function App() {
         status: 'PHÂN TÍCH XONG',
         rating: extractedRating,
       });
+      if (supabase) {
+        const { error } = await supabase.from('analyses').insert({
+          user_id: session.user.id,
+          mode: activeMode,
+          youtube_url: youtubeUrl || null,
+          transcript: transcript || null,
+          segment_count: normalizedSegmentCount,
+          result_md: responseText,
+          rating: extractedRating,
+        });
+        if (error) {
+          const msg = String(error.message || '');
+          if (msg.includes('new row violates row-level security policy')) {
+            addToast('Supabase RLS đang chặn insert. Hãy bật policy insert/select cho bảng analyses.', 'error');
+          } else if (msg.includes('relation') && msg.includes('analyses')) {
+            addToast('Chưa tạo bảng analyses trên Supabase. Hãy tạo table + bật RLS/policy trước.', 'error');
+          } else {
+            addToast(msg || 'Không thể lưu lịch sử.', 'error');
+          }
+        } else {
+          refreshAnalyses(session.user.id);
+        }
+      }
       addToast('Phân tích hoàn tất!');
     } catch (error) {
       console.error(error);
@@ -113,7 +183,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [youtubeUrl, script, segmentCount, activeMode, addToast]);
+  }, [session, youtubeUrl, script, segmentCount, activeMode, addToast, refreshAnalyses]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -207,6 +277,24 @@ export default function App() {
     addToast('Đã xuất file JSON (.json)!');
   };
 
+  const handleSignOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    addToast('Đã đăng xuất!');
+  };
+
+  const handleLoadAnalysis = (id) => {
+    const a = analyses.find((x) => x.id === id);
+    if (!a) return;
+    setActiveMode(a.mode || 'GENERAL');
+    setYoutubeUrl(a.youtube_url || '');
+    setScript(a.transcript || '');
+    setSegmentCount(a.segment_count || 3);
+    setOptimizedScript(a.result_md || '');
+    setMetrics((prev) => ({ ...prev, status: 'ĐÃ TẢI', rating: a.rating || prev.rating }));
+    addToast('Đã tải từ lịch sử!');
+  };
+
   return (
     <div className="flex h-screen bg-[#060b18] text-slate-100 font-sans selection:bg-indigo-500/30 overflow-hidden relative">
       <Sidebar
@@ -222,10 +310,16 @@ export default function App() {
           activeMode={activeMode}
           onOptimize={handleOptimize}
           onMenuClick={() => setIsSidebarOpen(true)}
+          userEmail={session?.user?.email || null}
+          onSignOut={session?.user ? handleSignOut : null}
         />
 
-        {activeMode === 'GUIDE' ? (
+        {isRecovery ? (
+          <AuthPage supabase={supabase} onToast={addToast} />
+        ) : activeMode === 'GUIDE' ? (
           <GuidePage />
+        ) : !session?.user ? (
+          <AuthPage supabase={supabase} onToast={addToast} />
         ) : (
           <EditorArea
             script={script}
@@ -243,6 +337,9 @@ export default function App() {
             onCopy={handleCopy}
             onExportMarkdown={handleExportMarkdown}
             onExportJson={handleExportJson}
+            userEmail={session?.user?.email || null}
+            analyses={analyses}
+            onLoadAnalysis={handleLoadAnalysis}
           />
         )}
       </main>

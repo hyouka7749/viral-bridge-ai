@@ -17,6 +17,9 @@ const EditorArea = ({
   onOptimize,
   onExportMarkdown,
   onExportJson,
+  userEmail,
+  analyses,
+  onLoadAnalysis,
 }) => {
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState('input'); // mobile tab: 'input' | 'result'
@@ -115,7 +118,27 @@ const EditorArea = ({
           <CheckCircle2 size={15} />
           <span className="text-xs font-semibold uppercase tracking-widest">AI Content Strategy</span>
         </div>
-        {optimizedScript && (
+        <div className="flex items-center gap-2">
+          {userEmail && Array.isArray(analyses) && analyses.length > 0 && (
+            <select
+              value=""
+              onChange={(e) => {
+                const id = e.target.value;
+                if (!id) return;
+                onLoadAnalysis?.(id);
+                e.target.value = '';
+              }}
+              className="hidden md:block bg-white/[0.03] border border-white/[0.08] rounded-lg px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-indigo-500/50 max-w-[240px]"
+            >
+              <option value="" className="bg-[#0b1020]">Lịch sử</option>
+              {analyses.map((a) => (
+                <option key={a.id} value={a.id} className="bg-[#0b1020]">
+                  {new Date(a.created_at).toLocaleString()} · {a.mode}
+                </option>
+              ))}
+            </select>
+          )}
+          {optimizedScript && (
           <div className="flex items-center gap-2">
             <button
               onClick={onExportJson}
@@ -140,7 +163,8 @@ const EditorArea = ({
               {copied ? 'Copied!' : 'Copy'}
             </button>
           </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Content */}
